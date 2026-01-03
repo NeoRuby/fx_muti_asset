@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { DurationData } from '../types';
 
 const DurationChart: React.FC = () => {
@@ -8,91 +8,87 @@ const DurationChart: React.FC = () => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [loading, setLoading] = useState(true);
-  const [errorInfo, setErrorInfo] = useState<string | null>(null);
+  const [errorInfo, setErrorInfo] = useState<{message: string, url: string} | null>(null);
+
+  const loadData = async () => {
+    setLoading(true);
+    setErrorInfo(null);
+    /**
+     * 强制清除缓存：添加时间戳。
+     * 由于文件已移动到 public 目录下，它会被部署在网站根路径。
+     * 使用绝对路径 /test.txt 能够确保在任何路由下都能正确访问。
+     */
+    const targetUrl = `/test.txt?t=${new Date().getTime()}`;
+    const fullUrl = new URL(targetUrl, window.location.href).href;
+
+    try {
+      const response = await fetch(targetUrl);
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error(`文件不存在 (404)。请确保 test.txt 已放置在项目的 public 文件夹中。`);
+        }
+        throw new Error(`服务器响应异常: ${response.status} ${response.statusText}`);
+      }
+      
+      const text = await response.text();
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+      
+      if (lines.length <= 1) {
+        throw new Error('文件内容为空或格式不正确。');
+      }
+
+      const dataLines = lines.slice(1);
+      const parsedData = dataLines
+        .map((line, index) => {
+          const parts = line.split(/\s+/);
+          if (parts.length < 2) return null;
+          
+          const rawDate = parts[0].trim();
+          const rawValue = parts[1].trim();
+          const value = parseFloat(rawValue);
+          
+          if (isNaN(value)) return null;
+
+          // 处理 D/M/YYYY 格式
+          const dateParts = rawDate.split('/');
+          if (dateParts.length === 3) {
+            const day = dateParts[0].padStart(2, '0');
+            const month = dateParts[1].padStart(2, '0');
+            const year = dateParts[2];
+            return { date: `${year}-${month}-${day}`, value };
+          }
+
+          if (rawDate.includes('-') && rawDate.split('-').length === 3) {
+              return { date: rawDate, value };
+          }
+          return null;
+        })
+        .filter((item): item is DurationData => item !== null);
+
+      if (parsedData.length === 0) {
+        throw new Error('未能解析到任何有效数据行，请检查数据分隔符是否为空格或Tab。');
+      }
+
+      parsedData.sort((a, b) => a.date.localeCompare(b.date));
+      setData(parsedData);
+      
+      if (parsedData.length > 0) {
+        setStartDate(parsedData[0].date);
+        setEndDate(parsedData[parsedData.length - 1].date);
+      }
+    } catch (err: any) {
+      console.error("Data Load Error:", err);
+      setErrorInfo({
+        message: err.message || '未知网络错误',
+        url: fullUrl
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
-      setErrorInfo(null);
-      try {
-        // 获取根目录下的 test.txt
-        const response = await fetch('test.txt');
-        if (!response.ok) {
-          throw new Error(`无法获取文件: ${response.status} ${response.statusText}`);
-        }
-        
-        const text = await response.text();
-        // 按行分割，并过滤掉完全空白的行
-        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-        
-        if (lines.length <= 1) {
-          throw new Error('文件内容不足（可能只有表头或为空）');
-        }
-
-        // 第一行是表头，从第二行开始解析数据
-        const dataLines = lines.slice(1);
-        
-        const parsedData = dataLines
-          .map((line, index) => {
-            // 使用正则表达式匹配一个或多个空白字符（支持 Tab 和空格）
-            const parts = line.split(/\s+/);
-            
-            // 确保每行至少有两列：日期 和 数值
-            if (parts.length < 2) {
-              console.warn(`第 ${index + 2} 行数据格式不完整: "${line}"`);
-              return null;
-            }
-            
-            const rawDate = parts[0].trim();
-            const rawValue = parts[1].trim();
-            const value = parseFloat(rawValue);
-            
-            if (isNaN(value)) {
-              console.warn(`第 ${index + 2} 行数值解析失败: "${rawValue}"`);
-              return null;
-            }
-
-            // 处理 D/M/YYYY 格式 (例如 4/1/2022)
-            const dateParts = rawDate.split('/');
-            if (dateParts.length === 3) {
-              const day = dateParts[0].padStart(2, '0');
-              const month = dateParts[1].padStart(2, '0');
-              const year = dateParts[2];
-              // 转化为标准 YYYY-MM-DD 格式，便于排序和过滤
-              return { date: `${year}-${month}-${day}`, value };
-            }
-
-            // 如果日期已经是 YYYY-MM-DD 格式
-            if (rawDate.includes('-') && rawDate.split('-').length === 3) {
-                return { date: rawDate, value };
-            }
-
-            console.warn(`第 ${index + 2} 行日期格式无法识别: "${rawDate}"`);
-            return null;
-          })
-          .filter((item): item is DurationData => item !== null);
-
-        if (parsedData.length === 0) {
-          throw new Error('解析后未发现有效数据行');
-        }
-
-        // 按日期从旧到新排序
-        parsedData.sort((a, b) => a.date.localeCompare(b.date));
-
-        setData(parsedData);
-        
-        // 自动初始化日期筛选范围
-        if (parsedData.length > 0) {
-          setStartDate(parsedData[0].date);
-          setEndDate(parsedData[parsedData.length - 1].date);
-        }
-      } catch (err: any) {
-        console.error("数据加载错误:", err);
-        setErrorInfo(err.message || '未知错误');
-      } finally {
-        setLoading(false);
-      }
-    };
     loadData();
   }, []);
 
@@ -116,81 +112,85 @@ const DurationChart: React.FC = () => {
   }, [filteredData]);
 
   if (loading) return (
-    <div className="flex flex-col justify-center items-center h-64 text-slate-500 space-y-4">
-      <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600"></div>
-      <p className="animate-pulse">正在读取 test.txt 并解析数据指标...</p>
+    <div className="flex flex-col justify-center items-center h-64 text-slate-500">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4"></div>
+      <p>正在连接 public 目录下的数据源...</p>
     </div>
   );
 
-  if (errorInfo || data.length === 0) return (
-    <div className="p-10 text-center bg-red-50 border border-red-100 rounded-xl">
-      <span className="text-4xl mb-4 block">⚠️</span>
-      <h3 className="text-lg font-bold text-red-800 mb-2">数据加载失败</h3>
-      <p className="text-red-600 mb-4">{errorInfo || '未能从 test.txt 解析到有效数据指标'}</p>
-      <div className="text-left bg-white p-4 rounded border border-red-200 text-xs text-slate-500 font-mono overflow-auto max-h-40">
-        <p className="font-bold mb-1">预期格式提示：</p>
-        <p>第一行为表头，第二行开始为数据。</p>
-        <p>示例：4/1/2022 [Tab] 1.7636</p>
-        <p className="mt-2 text-red-400">当前错误详情: {errorInfo}</p>
+  if (errorInfo) return (
+    <div className="p-8 bg-white rounded-2xl border border-red-100 shadow-xl max-w-2xl mx-auto">
+      <div className="flex items-center space-x-3 mb-4 text-red-600">
+        <span className="text-2xl">🚫</span>
+        <h3 className="text-lg font-bold">数据加载失败</h3>
+      </div>
+      <p className="text-slate-600 mb-6 text-sm leading-relaxed">
+        系统尝试访问 public 文件夹中的数据，但未能成功：
+      </p>
+      <div className="bg-slate-900 text-blue-400 p-4 rounded-lg font-mono text-xs break-all mb-6">
+        {errorInfo.url}
+      </div>
+      <div className="bg-red-50 p-4 rounded-lg border border-red-100 mb-6">
+        <p className="text-red-700 text-sm font-medium">错误详情: {errorInfo.message}</p>
+      </div>
+      <div className="flex space-x-4">
+        <button 
+          onClick={loadData}
+          className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors"
+        >
+          重试连接
+        </button>
+        <button 
+          onClick={() => window.location.reload()}
+          className="px-6 py-2 bg-slate-100 text-slate-600 rounded-lg text-sm font-bold hover:bg-slate-200 transition-colors"
+        >
+          刷新页面
+        </button>
       </div>
     </div>
   );
 
   return (
     <div className="space-y-6">
-      {/* 顶部统计卡片 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">平均久期 (选定周期)</p>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">平均久期</p>
           <p className="text-3xl font-bold text-slate-900">{stats.avg}</p>
         </div>
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">周期内峰值</p>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">样本最大值</p>
           <p className="text-3xl font-bold text-blue-600">{stats.max}</p>
         </div>
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">周期内谷值</p>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">样本最小值</p>
           <p className="text-3xl font-bold text-slate-400">{stats.min}</p>
         </div>
       </div>
 
-      {/* 日期筛选控制栏 */}
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-wrap items-center gap-6">
         <div className="flex items-center space-x-4">
           <div className="space-y-1">
-            <label className="text-[10px] font-bold text-slate-500 uppercase">开始日期</label>
+            <label className="text-[10px] font-bold text-slate-500 uppercase">开始</label>
             <input
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="block w-full rounded-lg border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
+              className="block rounded-lg border-slate-200 bg-slate-50 px-3 py-1.5 text-sm focus:border-blue-500 outline-none"
             />
           </div>
           <span className="text-slate-300 mt-5">—</span>
           <div className="space-y-1">
-            <label className="text-[10px] font-bold text-slate-500 uppercase">结束日期</label>
+            <label className="text-[10px] font-bold text-slate-500 uppercase">结束</label>
             <input
               type="date"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
-              className="block w-full rounded-lg border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
+              className="block rounded-lg border-slate-200 bg-slate-50 px-3 py-1.5 text-sm focus:border-blue-500 outline-none"
             />
           </div>
         </div>
-        <div className="flex-1 text-right">
-            <button 
-                onClick={() => {
-                    setStartDate(data[0].date);
-                    setEndDate(data[data.length-1].date);
-                }}
-                className="text-xs font-medium text-blue-600 hover:text-blue-800 underline underline-offset-4"
-            >
-                重置时间范围
-            </button>
-        </div>
       </div>
 
-      {/* 主图表区域 */}
       <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm">
         <div className="h-[450px] w-full">
           <ResponsiveContainer width="100%" height="100%">
@@ -225,32 +225,21 @@ const DurationChart: React.FC = () => {
                   padding: '12px',
                   fontSize: '12px'
                 }}
-                labelStyle={{ fontWeight: 'bold', marginBottom: '4px', color: '#1e293b' }}
               />
               <Area 
                 type="monotone" 
                 dataKey="value" 
-                name="全市场久期"
                 stroke="#2563eb" 
                 strokeWidth={2} 
-                fillOpacity={1} 
                 fill="url(#colorValue)" 
                 animationDuration={800}
-                activeDot={{ r: 5, strokeWidth: 0, fill: '#2563eb' }}
               />
             </AreaChart>
           </ResponsiveContainer>
         </div>
-        <div className="mt-8 pt-6 border-t border-slate-50 flex items-center justify-between text-slate-400 text-[10px] font-bold uppercase tracking-widest">
-          <div className="flex items-center space-x-2">
-            <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-            <span>DataSource: Root/test.txt</span>
-          </div>
-          <div className="flex space-x-4">
-            <span>Points: {filteredData.length}</span>
-            <span className="text-slate-300">|</span>
-            <span>Encoding: UTF-8</span>
-          </div>
+        <div className="mt-8 pt-4 border-t border-slate-50 flex items-center justify-between text-slate-400 text-[10px] font-bold uppercase">
+          <span>数据源: public/test.txt</span>
+          <span>有效样本数: {filteredData.length}</span>
         </div>
       </div>
     </div>
@@ -258,4 +247,3 @@ const DurationChart: React.FC = () => {
 };
 
 export default DurationChart;
-
